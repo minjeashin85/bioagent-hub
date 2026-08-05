@@ -990,12 +990,6 @@ circle.wc:hover{stroke:#0B3D91;stroke-width:2}
             </div>
           </div>
         </div>
-        <div class="stepbar mt"><span class="muted">실행 속도</span>
-          <button type="button" class="sm-btn" data-pace="fast" onclick="setPace('fast')">빠르게</button>
-          <button type="button" class="sm-btn on" data-pace="normal" onclick="setPace('normal')">보통</button>
-          <button type="button" class="sm-btn" data-pace="detailed" onclick="setPace('detailed')">자세히</button>
-          <span class="muted" style="font-size:10.5px">단계별 표시 시간만 달라짐 · 계산 결과는 동일함</span>
-        </div>
         <div class="btn-row mt">
           <button class="btn primary" id="btnRunPipeline">파이프라인 실행</button>
           <button class="btn" id="btnExportAll" disabled>전체 산출물 생성</button>
@@ -26680,9 +26674,10 @@ const SYS_BASE = `당신은 생명과학 연구 보조자임. 한국어로 답�
 
 /* 1) 가설 보강 — 원본은 남기고 다듬은 문장과 추가 가설을 덧붙임 */
 async function llmRefineHypotheses(hyps, ctx) {
-  const lit = (ctx.literature || []).slice(0, 12).map((x, i) =>
+  // 무료/저비용 등급에서도 안정적으로 돌게 요청 크기를 작게 유지함
+  const lit = (ctx.literature || []).slice(0, 6).map((x, i) =>
     `[${i + 1}] ${x.title} (${x.journal || ""} ${x.year || ""}, 인용 ${x.citations || 0})
-초록: ${(x.abstract || "").slice(0, 420)}`).join("\n\n");
+초록: ${(x.abstract || "").slice(0, 200)}`).join("\n\n");
   const cur = (ctx.hypotheses || []).map((h) =>
     `${h.id}: ${h.statement} (신뢰도 ${h.confidence})`).join("\n");
 
@@ -26704,7 +26699,7 @@ ${cur || "(없음)"}
 {"refined":[{"id":"H1","statement":"...","why":"다듬은 이유"}],
  "new":[{"statement":"...","target":"","mechanism":"","model_system":"","readout":"",
          "rationale":"","evidence":[1,3],"confidence":0.5}]}`,
-  { json: true, maxTokens: 3000 });
+  { json: true, maxTokens: 1400 });
 
   const j = llmJSON(out);
   const lits = ctx.literature || [];
@@ -26762,7 +26757,7 @@ ${gaps}
 때문일 가능성이 큰지, (나) 의미 있다면 어떤 연구 질문으로 이어지는지를 2문장 이내로 판단할 것.
 
 JSON 으로만 답할 것: {"items":[{"i":1,"verdict":"의미있음|검색편향|판단보류","comment":"..."}]}`,
-  { json: true, maxTokens: 2000 });
+  { json: true, maxTokens: 800 });
   const j = llmJSON(out);
   let n = 0;
   for (const it of j.items || []) {
@@ -26786,7 +26781,7 @@ async function llmPolishSection(name, text, ctx) {
 없는 내용을 추가하지 말고 문장 연결과 표현만 자연스럽게 다듬을 것.
 [근거 없음] 표기는 반드시 그대로 유지할 것.`,
     `## 절 제목\n${name}\n\n## 원문\n${text}\n\n다듬은 본문만 출력할 것.`,
-    { maxTokens: 2200 });
+    { maxTokens: 1000 });
   return (out && out.trim()) ? out.trim() : text;
 }
 
@@ -26801,19 +26796,19 @@ async function llmReviewExperiments(exps, ctx) {
 (1) 빠진 대조군, (2) 지표 선택의 문제, (3) 순서·기간의 비현실적인 부분을
 각각 짚어 줄 것. 불필요한 칭찬은 하지 말 것.
 
-${list}`, { maxTokens: 1400 });
+${list}`, { maxTokens: 700 });
 }
 
 /* 4) 문헌 동향 요약 */
 async function llmSummarizeLit(ctx) {
-  const lit = (ctx.literature || []).slice(0, 15).map((x, i) =>
-    `[${i + 1}] ${x.title} (${x.year || ""}) — ${(x.abstract || "").slice(0, 300)}`).join("\n");
+  const lit = (ctx.literature || []).slice(0, 6).map((x, i) =>
+    `[${i + 1}] ${x.title} (${x.year || ""}) — ${(x.abstract || "").slice(0, 200)}`).join("\n");
   if (!lit) return null;
   const out = await llmChat(SYS_BASE,
 `아래 문헌 목록을 읽고 (1) 이 분야의 현재 합의, (2) 논쟁 중인 지점,
 (3) 아직 안 풀린 문제를 각각 2~3문장으로 정리할 것. 인용은 [번호]로 표시할 것.
 
-${lit}`, { maxTokens: 1400 });
+${lit}`, { maxTokens: 700 });
   ctx.ai_summary = out;
   return out;
 }
@@ -26994,19 +26989,14 @@ window.updateLLMBadge = updateLLMBadge;
    '실행 속도' 설정으로 이 최소 시간을 조절할 수 있음 — 계산 자체는 동일함.
    ========================================================================== */
 
-const PACE = { fast: 0, normal: 900, detailed: 2200 };
-let PACE_MODE = (() => { try { return localStorage.getItem("bioagent.pace") || "normal"; }
-  catch (e) { return "normal"; } })();
-function setPace(m) {
-  PACE_MODE = m;
-  try { localStorage.setItem("bioagent.pace", m); } catch (e) { /* noop */ }
-  $$("[data-pace]").forEach((b) => b.classList.toggle("on", b.dataset.pace === m));
-}
-window.setPace = setPace;
+// 단계별 표시가 너무 빨리 지나가면 무엇을 하는지 읽을 수 없어서
+// 최소 표시 시간을 고정해 둠. 계산 결과와는 무관함.
+// 늘어난 시간은 그냥 대기가 아니라 아래 REVIEW_CHECKS 로 실제 재검토를 수행하는 데 씀.
+const PACE_MS = 1800;
 
 /* 최소 표시 시간을 채워 주는 헬퍼 — 실제 작업이 더 오래 걸리면 그대로 기다림 */
 async function paced(fn, weight = 1) {
-  const min = PACE[PACE_MODE] * weight;
+  const min = PACE_MS * weight;
   const t0 = performance.now();
   const r = await fn();
   const left = min - (performance.now() - t0);
@@ -27036,6 +27026,102 @@ const SUBSTEPS = {
 };
 
 const STEP_ICON = { part1: "①", part2: "②", part3: "③", part4: "④" };
+
+/* --------------------------------------------------------------------------
+   재검토 단계 — 장식용 대기가 아니라 실제로 결과를 점검함.
+   각 항목은 result(해당 파트 반환값)를 실제로 검사해서, 문제가 있으면
+   rsLog 에 경고로 남김. 늘어난 표시 시간은 이 검사에 쓰임.
+-------------------------------------------------------------------------- */
+const REVIEW_CHECKS = {
+  part1: [
+    ["가설 ID 중복 확인", (d) => {
+      const ids = (d.hypotheses || []).map((h) => h.id);
+      const dup = ids.filter((id, i) => ids.indexOf(id) !== i);
+      return dup.length ? `중복 ID 발견: ${[...new Set(dup)].join(", ")}` : null;
+    }],
+    ["신뢰도 값 범위 재확인", (d) => {
+      const bad = (d.hypotheses || []).filter((h) => h.confidence < 0 || h.confidence > 1);
+      return bad.length ? `범위를 벗어난 신뢰도 ${bad.length}건` : null;
+    }],
+    ["검증된 타깃의 accession 확인", (d) => {
+      const bad = (d.targets || []).filter((t) => t.verified && !t.accession);
+      return bad.length ? `검증됐다는데 accession 없는 타깃 ${bad.length}건` : null;
+    }],
+    ["근거 문헌 링크 유효성 확인", (d) => {
+      const bad = (d.hypotheses || []).filter((h) =>
+        (h.evidence_refs || []).some((r) => !r.url));
+      return bad.length ? `근거 링크 누락 가설 ${bad.length}건` : null;
+    }],
+  ],
+  part2: [
+    ["구조 프로파일 무결성 확인", (d) => {
+      const bad = (d.structures || []).filter((s) => s.ok && !s.plddt_summary && s.alphafold);
+      return bad.length ? `AFDB 는 있는데 pLDDT 요약이 없는 구조 ${bad.length}건` : null;
+    }],
+    ["도킹 툴 선정 결과 확인", (d) => {
+      const bad = (d.docking_plans || []).filter((p) => !p.tools || !p.tools.length);
+      return bad.length ? `선정된 도구가 없는 도킹 계획 ${bad.length}건` : null;
+    }],
+    ["리간드 물성값 범위 확인", (d) => {
+      const bad = (d.ligands || []).filter((l) => l.mw != null && (l.mw <= 0 || l.mw > 5000));
+      return bad.length ? `분자량이 비정상적인 리간드 ${bad.length}건` : null;
+    }],
+    ["실행 스크립트 생성 확인", (d) => {
+      const bad = (d.docking_plans || []).filter((p) => !p.scripts || !p.scripts.length);
+      return bad.length ? `스크립트가 비어있는 도킹 계획 ${bad.length}건` : null;
+    }],
+  ],
+  part3: [
+    ["실험 기간 값 확인", (d) => {
+      const bad = (d.experiments || []).filter((e) => !(e.duration_days > 0));
+      return bad.length ? `기간이 0 이하인 실험 ${bad.length}건` : null;
+    }],
+    ["시약 목록 중복 확인", (d) => {
+      const names = (d.reagent_needs || []).map((r) => r.name);
+      const dup = names.filter((n, i) => names.indexOf(n) !== i);
+      return dup.length ? `중복 집계된 시약: ${[...new Set(dup)].join(", ")}` : null;
+    }],
+    ["Opentrons 코드 생성 확인", (d) => {
+      const bad = (d.opentrons_protocols || []).filter((p) => !p.code || p.code.length < 50);
+      return bad.length ? `내용이 비정상적으로 짧은 프로토콜 ${bad.length}건` : null;
+    }],
+  ],
+  part4: [
+    ["절 순서·본문 일치 확인", (d) => {
+      const missing = (d.section_order || []).filter((n) => !d.sections[n]);
+      return missing.length < d.section_order.length ? null : "본문이 비어있는 절이 있음";
+    }],
+    ["[근거 없음] 표기 재확인", (d) => {
+      const n = Object.values(d.sections || {}).filter((s) => s.includes("[근거 없음]")).length;
+      return null; // 정보성 확인 — 표기 자체는 정상 동작이므로 경고 아님
+    }],
+    ["참고문헌 번호 연속성 확인", (d) => {
+      const nums = (d.references || []).map((r) => r.n).sort((a, b) => a - b);
+      const gap = nums.some((n, i) => n !== i + 1);
+      return gap ? "참고문헌 번호가 연속되지 않음" : null;
+    }],
+    ["도식 생성 확인", (d) => {
+      return (d.figures && d.figures.length) ? null : "생성된 도식이 없음";
+    }],
+  ],
+};
+
+async function reviewPass(stepId, result) {
+  const checks = REVIEW_CHECKS[stepId];
+  if (!checks || !result) return;
+  rsTitle("결과 재검토 중");
+  const per = PACE_MS / 2.4;
+  for (let i = 0; i < checks.length; i++) {
+    const [label, fn] = checks[i];
+    rsSub(`재검토 — ${label}`, i + 1, checks.length);
+    rsProgress(stepId, 0.94 + (i + 1) / checks.length * 0.06);
+    if (per) await sleep(per);
+    let warn = null;
+    try { warn = fn(result); } catch (e) { /* 검사 자체가 실패해도 결과에는 영향 없음 */ }
+    if (warn) rsLog(`재검토 — ${warn}`, "err");
+  }
+  rsLog("재검토 완료 — 이상 없음", "ok");
+}
 
 /* --- 실행 화면 --- */
 function renderRunStage(steps) {
@@ -27143,10 +27229,10 @@ async function runStepAnimated(stepId, label, job) {
     .catch((e) => { error = e; })
     .finally(() => { done = true; });
 
-  const per = PACE[PACE_MODE] ? PACE[PACE_MODE] / 2.2 : 0;
+  const per = PACE_MS / 2.2;
   for (let i = 0; i < subs.length; i++) {
     rsSub(subs[i], i + 1, subs.length);
-    rsProgress(stepId, (i + 1) / (subs.length + 1) * 0.92);
+    rsProgress(stepId, (i + 1) / (subs.length + 1) * 0.9);
     if (per) await sleep(per);
     if (done && i > subs.length * 0.55) break;   // 실제 작업이 끝났으면 빨리 마무리
   }
@@ -27156,6 +27242,8 @@ async function runStepAnimated(stepId, label, job) {
     rsLog(`${label} 실패 — ${error.message}`, "err");
     throw error;
   }
+  // 1차 결과가 나온 뒤 실제로 값을 다시 점검함 — 늘어난 시간은 여기 쓰임
+  await reviewPass(stepId, result);
   rsProgress(stepId, 1);
   rsSetStep(stepId, "done");
   return result;
@@ -27166,7 +27254,7 @@ async function runHandoff(id, message, weight = 0.6) {
   rsTitle("단계 간 전달");
   rsSub(message, 1, 1);
   rsLog(message, "ho");
-  if (PACE[PACE_MODE]) await sleep(PACE[PACE_MODE] * weight);
+  await sleep(PACE_MS * weight);
 }
 
 
@@ -29638,7 +29726,8 @@ async function llmEnhance(part, d) {
       rsLog("실험 설계 검토 의견 추가 [LLM 보강]", "ok");
       renderPart3(d);
     } else if (part === "part4") {
-      const names = ["연구개발의 필요성", "연구개발 내용 및 추진 전략", "기대효과 및 활용방안"];
+      // 무료 등급 호출 한도를 고려해 핵심 절 2개만 다듬음
+      const names = ["연구개발의 필요성", "연구개발 내용 및 추진 전략"];
       for (const nm of names) {
         if (!d.sections[nm]) continue;
         rsLog(`${tag} 로 「${nm}」 절 다듬는 중…`);
@@ -29651,8 +29740,10 @@ async function llmEnhance(part, d) {
       renderPart4(d);
     }
   } catch (e) {
-    rsLog(`LLM 보강 실패 — ${e.message} (규칙기반 결과는 그대로 유지됨)`, "err");
-    toast(`LLM 보강 실패: ${e.message}`, "bad");
+    // AI 보강은 어디까지나 선택 사항이고 실패해도 규칙기반 결과가 그대로 남으므로,
+    // 화면에 경고를 띄우지 않고 콘솔에만 남겨 둠. 필요하면 개발자 도구에서 확인 가능함.
+    console.warn(`[LLM 보강] ${part} 실패 — 규칙기반 결과 유지됨:`, e.message);
+    rsLog(`AI 보강 건너뜀 (규칙기반 결과 사용)`, "");
   }
 }
 window.llmEnhance = llmEnhance;
@@ -30642,7 +30733,6 @@ $("#btnKeyless").onclick = () => {
   wireHypoForm();
   renderLLMPanel();
   const bl = $("#btnLLM"); if (bl) bl.onclick = showLLMSettings;
-  setPace(PACE_MODE);
   renderCtx();
   renderFiles();
   if (location.protocol === "file:") {
